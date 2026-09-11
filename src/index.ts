@@ -102,13 +102,18 @@ export const parser = {
       }
     }
 
-    // /posts/<slug>/ for posts; directory-style URLs for pages
+    // /posts/<slug>/ for top-level posts, /posts/<subpath>/<slug>/ for posts
+    // nested under _posts/ — subdirectories keep posts from colliding on the
+    // same slug. Pages keep directory-style URLs:
     //   about/index.md → /about/   about.md → /about/   index.md → /
+    const subPath = isPost
+      ? relToSource.slice(POSTS_DIR.length + 1, relToSource.length - base.length - ext.length)
+      : "";
     let pageUrl: string;
     if (relToSource === "index.md") pageUrl = "/";
     else if (relToSource.endsWith("/index.md")) pageUrl = `/${relToSource.slice(0, -"/index.md".length)}/`;
     else pageUrl = `/${relToSource.replace(/\.(md|markdown)$/, "")}/`;
-    const url = meta.permalink ?? (isPost ? `/posts/${slug}/` : pageUrl);
+    const url = meta.permalink ?? (isPost ? `/posts/${subPath}${slug}/` : pageUrl);
 
     const title = meta.title ?? markdownTitle(body) ?? slug;
 
