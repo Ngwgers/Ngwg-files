@@ -1,0 +1,19 @@
+{
+  "name": "ngwg-files",
+  "version": "0.2.0",
+  "description": "Must-load Ngwg plugin: source parsing (markdown/frontmatter → objects) and deployment (template rendering → public/)",
+  "type": "module",
+  "module": "src/index.ts",
+  "dependencies": {
+    "@mdit/plugin-abbr": "^0.16.0",
+    "@mdit/plugin-alert": "^0.16.0",
+    "@mdit/plugin-footnote": "^0.16.8",
+    "@mdit/plugin-mark": "^0.16.0",
+    "@mdit/plugin-sub": "^0.16.0",
+    "@mdit/plugin-sup": "^0.16.0",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "markdown-it-admonition": "^1.0.4",
+    "markdown-it-anchor": "^10.0.0"
+  }
+}
