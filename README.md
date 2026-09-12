@@ -1,13 +1,14 @@
 # Ngwg-files
 
-must-load 插件，实现两个协议：
+must-load 插件，以三个独立单元实现两个协议：
 
-- **ngwg-parser-v1** — Markdown（含 YAML frontmatter）→ SourceObject。
-  `_posts/` 下的文件是文章（`2026-03-01-slug.md` 命名约定），其余是页面；
-  其他扩展名的文件由 Core 按资产原样复制。
-- **ngwg-deployer-v1** — 渲染任务 → public/。自带 mustache 风格模板引擎
-  （变量/循环/条件/partial/helper 调用），语法见
+- **ngwg-markdown-parser**（ngwg-parser-v1）— Markdown（含 YAML frontmatter）
+  → SourceObject。`_posts/` 下的文件是文章（`2026-03-01-slug.md` 命名约定），
+  其余是页面；其他扩展名的文件由 Core 按资产原样复制。
+- **ngwg-template-deployer**（ngwg-deployer-v1）— 渲染页面任务 → public/。
+  自带 mustache 风格模板引擎（变量/循环/条件/partial/helper 调用），语法见
   [主题开发](../Ngwg-docs/theme-development.md)。
+- **ngwg-asset-deployer**（ngwg-deployer-v1）— 把资产任务原样复制进 public/。
 
 Markdown 渲染器迁移自 [fewu-renderer-markdown](https://github.com/0xarch)：
 markdown-it + highlight.js + `@mdit/plugin-*`（admonition `!!! note`、脚注、
@@ -33,10 +34,11 @@ This project is licensed under the [GNU General Public License v3.0 (GPL-3.0)](L
 
 # Ngwg-files
 
-A must-load plugin implementing two protocols:
+A must-load plugin implementing two protocols through three independent units:
 
-- **ngwg-parser-v1** — Markdown (with YAML frontmatter) → SourceObject. Files under `_posts/` are posts (following the `2026-03-01-slug.md` naming convention), everything else is a page; files with other extensions are copied as assets by Core.
-- **ngwg-deployer-v1** — render tasks → public/. Ships a mustache-style template engine (variables/loops/conditionals/partial/helper calls); see [Theme Development](../Ngwg-docs/theme-development.md) for the syntax.
+- **ngwg-markdown-parser** (ngwg-parser-v1) — Markdown (with YAML frontmatter) → SourceObject. Files under `_posts/` are posts (following the `2026-03-01-slug.md` naming convention), everything else is a page; files with other extensions are copied as assets by Core.
+- **ngwg-template-deployer** (ngwg-deployer-v1) — renders page tasks → public/. Ships a mustache-style template engine (variables/loops/conditionals/partial/helper calls); see [Theme Development](../Ngwg-docs/theme-development.md) for the syntax.
+- **ngwg-asset-deployer** (ngwg-deployer-v1) — copies asset tasks verbatim into public/.
 
 The Markdown renderer is migrated from [fewu-renderer-markdown](https://github.com/0xarch): markdown-it + highlight.js + `@mdit/plugin-*` (admonitions `!!! note`, footnotes, `==highlight==`, sub/superscript, abbreviations), with inline HTML passed through. This is the only repository in Ngwg that uses npm dependencies — Core automatically runs `bun install` on the first build.
 
