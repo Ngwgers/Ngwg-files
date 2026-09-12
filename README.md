@@ -23,6 +23,8 @@ markdown-it + highlight.js + `@mdit/plugin-*`（admonition `!!! note`、脚注�
 
 **长文分段**：渲染超过 `segment_threshold`（主题配置，默认 8000 字符）的文章时，
 正文按顶层块边界切段：页面只带第一段，其余写入 `seg/N.html` 片段供主题懒加载。
+切分目标段长由插件选项 `chunk_size` 控制（默认 4000，ngwg.yaml 写
+`plugins.files.option.chunk_size`；任意负数整体禁用分段）。
 
 **摘要标记**：正文中的 `<!-- more -->` 之前的部分解析为 `excerptHtml`
 （首页等列表页显示的作者控制摘要）；文章页始终显示完整内容。
@@ -48,7 +50,7 @@ A must-load plugin implementing two protocols through three independent units:
 
 The Markdown renderer is migrated from [fewu-renderer-markdown](https://github.com/0xarch): markdown-it + highlight.js + `@mdit/plugin-*` (admonitions `!!! note`, footnotes, `==highlight==`, sub/superscript, abbreviations), with inline HTML passed through. This is the only repository in Ngwg that uses npm dependencies — Core automatically runs `bun install` on the first build.
 
-**Long-post segmentation**: when rendering a post longer than `segment_threshold` (a theme option, 8000 characters by default), the body is split at top-level block boundaries: the page only carries the first segment, and the rest are written to `seg/N.html` fragments for themes to lazy-load.
+**Long-post segmentation**: when rendering a post longer than `segment_threshold` (a theme option, 8000 characters by default), the body is split at top-level block boundaries: the page only carries the first segment, and the rest are written to `seg/N.html` fragments for themes to lazy-load. The target segment length is the `chunk_size` plugin option (default 4000; set `plugins.files.option.chunk_size` in ngwg.yaml — any negative value disables segmentation).
 
 **Excerpt marker**: the part of the body before `<!-- more -->` is parsed as `excerptHtml` (the author-controlled excerpt shown on list pages such as the home page); the post page always shows the full content.
 

@@ -11,6 +11,9 @@
 //                      language (see resolveI18n)
 //                      ngwg-fallback-deployer — safety net copying any task
 //                      no other deployer claimed
+//   ngwg-option-v1   : files-options — publishes the chunk_size option
+//                      (long-post segmentation target length; negative
+//                      disables segmentation)
 //
 // Every unit is independent and declares the files/tasks it handles; the
 // module itself is fully self-contained: no imports from Ngwg-core, so it
@@ -344,12 +347,17 @@ export function resolveI18n(
 // template engine, including long-post segmentation.
 export const templateDeployer = {
   name: "ngwg-template-deployer",
-  version: "0.2.0",
+  version: "0.2.1",
   types: ["page" as const],
 
   async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
     const pool = new Pool(8);
     const segThreshold = Number(env.theme?.config?.segment_threshold ?? SEGMENT_DEFAULT_THRESHOLD);
+    // chunk_size plugin option (plugins.<name>.option.chunk_size): target
+    // segment length; any negative value disables segmentation entirely
+    const rawChunk = (ctx.options as any)?.self?.chunk_size;
+    const chunkSize = rawChunk === undefined ? SEGMENT_SIZE : Number(rawChunk);
+    const segmentationEnabled = Number.isFinite(chunkSize) && chunkSize >= 0;
 
     // i18n: resolve the language for this whole deploy run
     const i18n: Record<string, Record<string, any>> = env.theme?.i18n ?? {};
@@ -387,8 +395,8 @@ export const templateDeployer = {
       // long-post segmentation: swap the body for its first segment + lazy
       // marker, write the remaining segments as sibling fragment files
       const page = task.context?.page;
-      if (page && page.kind === "post" && typeof page.html === "string" && !page.meta.no_segment) {
-        const segs = splitHtmlSegments(page.html, segThreshold);
+      if (segmentationEnabled && page && page.kind === "post" && typeof page.html === "string" && !page.meta.no_segment) {
+        const segs = splitHtmlSegments(page.html, segThreshold, chunkSize);
         if (segs) {
           const baseDir = path.join(env.publicDir, String(page.url).replace(/^\//, ""));
           page.html = segs[0] + segEndMarker("seg/2.html");
@@ -441,4 +449,15 @@ export const fallbackDeployer = {
   },
 };
 
-export default { parsers: [markdownParser], deployers: [templateDeployer, fallbackDeployer] };
+// ngwg-option-v1: opts in to the option system and publishes chunk_size —
+// the target segment length for long-post segmentation (any negative value
+// disables segmentation; the per-post no_segment frontmatter still wins).
+export const options = {
+  name: "files-options",
+  version: "0.2.1",
+  public: ["chunk_size"],
+  private: [],
+  readShared: false,
+};
+
+export default { parsers: [markdownParser], deployers: [templateDeployer, fallbackDeployer], options: [options] };
