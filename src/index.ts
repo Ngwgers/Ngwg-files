@@ -1,16 +1,22 @@
 // Ngwg-files — must-load Ngwg plugin implementing two protocols via units:
 //
 //   ngwg-parser-v1   : ngwg-markdown-parser — markdown/frontmatter source
-//                      files → SourceObjects
+//                      files → SourceObject array (the page object plus one
+//                      derived object per referenced local image; images are
+//                      re-homed to /assets/images/<hash>-<name> and the
+//                      markdown links rewritten to those absolute URLs)
 //   ngwg-deployer-v1 : ngwg-template-deployer — page tasks → rendered files
 //                      under public/ (mustache-style templates; see template.ts)
-//                      ngwg-asset-deployer — asset tasks → verbatim copies
+//                      ngwg-fallback-deployer — safety net copying any task
+//                      no other deployer claimed
 //
 // Every unit is independent and declares the files/tasks it handles; the
 // module itself is fully self-contained: no imports from Ngwg-core, so it
 // can be distributed and installed as a standalone repository.
 
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { Pool } from "./pool.ts";
 import { markdownToHtml, markdownTitle, splitMoreMarker } from "./markdown.ts";
 import { render } from "./template.ts";
@@ -52,9 +58,73 @@ interface RenderTask {
 const POSTS_DIR = "_posts";
 const DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})-(.+)$/;
 
+// --- local image collection (unified asset placement) ------------------------
+//
+// Inline images referencing local files (`![x](./img/a.png)`) are extracted
+// as derived SourceObjects and the markdown links are rewritten to their
+// unified, content-addressed location /assets/images/<hash>-<name> — an
+// absolute URL that works on any page depth without a <base> tag. Images
+// shared by several posts hash to the same URL, so they deploy exactly once.
+
+const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp", ".ico"]);
+const INLINE_IMAGE = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(\s+"[^"]*")?\s*\)/g;
+
+function localImagePath(src: string): string | null {
+  if (!src || /^(https?:)?\/\//i.test(src) || src.startsWith("/") || src.startsWith("data:")) return null;
+  let p = src;
+  try {
+    p = decodeURIComponent(src);
+  } catch {
+    // keep the raw spelling when it is not valid percent-encoding
+  }
+  return IMAGE_EXTS.has(path.extname(p).toLowerCase()) ? p : null;
+}
+
+async function collectImages(ctx: PluginContext, filePath: string, bodies: string[]) {
+  const replacements = new Map<string, string>(); // src as written -> absolute URL
+  const images: SourceObject[] = [];
+  const seen = new Set<string>();
+  for (const body of bodies) {
+    for (const m of body.matchAll(INLINE_IMAGE)) {
+      const src = m[2];
+      if (replacements.has(src)) continue;
+      const rel = localImagePath(src);
+      if (!rel) continue;
+      const abs = path.resolve(path.dirname(filePath), rel);
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(await readFile(abs));
+      } catch {
+        continue; // missing or unreadable: leave the link untouched
+      }
+      const hash = createHash("sha1").update(bytes).digest("hex").slice(0, 10);
+      const url = `/assets/images/${hash}-${path.basename(abs)}`;
+      replacements.set(src, encodeURI(url));
+      images.push({
+        path: abs,
+        relPath: ctx.relPath(abs),
+        url,
+        kind: "asset",
+        ext: path.extname(abs).toLowerCase(),
+        meta: {},
+        raw: bytes,
+      });
+    }
+  }
+  const rewrite = (body: string): string =>
+    replacements.size === 0
+      ? body
+      : body.replace(INLINE_IMAGE, (whole, alt: string, src: string, title?: string) =>
+          replacements.has(src) ? `![${alt}](${replacements.get(src)}${title ?? ""})` : whole,
+        );
+  return { rewrite, images };
+}
+
 export const markdownParser = {
   name: "ngwg-markdown-parser",
-  version: "0.1.0",
+  version: "0.2.0",
   extensions: [".md", ".markdown"],
 
   async parseFile(ctx: PluginContext, filePath: string, content: Uint8Array): Promise<SourceObject | null> {
@@ -123,25 +193,32 @@ export const markdownParser = {
     // article page itself keeps the full content — the marker only controls
     // what listings show.
     const { body: mainBody, excerptSource } = splitMoreMarker(body);
-    const fullBody = excerptSource !== null ? excerptSource + mainBody : mainBody;
+    const { rewrite, images } = await collectImages(ctx, filePath, excerptSource === null ? [mainBody] : [excerptSource, mainBody]);
+    const excerptHtml = excerptSource === null ? undefined : markdownToHtml(rewrite(excerptSource));
+    const fullBody = (excerptSource === null ? "" : rewrite(excerptSource)) + rewrite(mainBody);
 
-    return {
-      path: filePath,
-      relPath: relToSource,
-      url: String(url),
-      kind,
-      ext,
-      meta: {
-        ...meta,
-        title: String(title),
-        slug,
-        _fileDate: fileDate ?? undefined,
-        date: meta.date ?? (fileDate ? fileDate.toISOString().slice(0, 10) : ""),
+    // the primary object for the markdown file itself, plus one derived
+    // object per referenced local image
+    return [
+      {
+        path: filePath,
+        relPath: relToSource,
+        url: String(url),
+        kind,
+        ext,
+        meta: {
+          ...meta,
+          title: String(title),
+          slug,
+          _fileDate: fileDate ?? undefined,
+          date: meta.date ?? (fileDate ? fileDate.toISOString().slice(0, 10) : ""),
+        },
+        body: fullBody,
+        html: markdownToHtml(fullBody),
+        excerptHtml,
       },
-      body: fullBody,
-      html: markdownToHtml(fullBody),
-      excerptHtml: excerptSource !== null ? markdownToHtml(excerptSource) : undefined,
-    };
+      ...images,
+    ];
   },
 };
 
@@ -202,7 +279,7 @@ function segEndMarker(next: string | null): string {
 // template engine, including long-post segmentation.
 export const templateDeployer = {
   name: "ngwg-template-deployer",
-  version: "0.1.0",
+  version: "0.2.0",
   types: ["page" as const],
 
   async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
@@ -247,20 +324,34 @@ export const templateDeployer = {
   },
 };
 
-// Copies "asset" tasks verbatim (theme assets, source files no parser claimed).
-export const assetDeployer = {
-  name: "ngwg-asset-deployer",
-  version: "0.1.0",
-  types: ["asset" as const],
+// The safety net: copies any task no other deployer claimed (theme assets,
+// source files and binaries emitted by parsers). Page tasks reaching the
+// fallback mean nothing claims page rendering — that is a misconfiguration,
+// so it fails loudly instead of silently dropping pages.
+export const fallbackDeployer = {
+  name: "ngwg-fallback-deployer",
+  version: "0.2.0",
+  fallback: true,
 
   async deploy(ctx: PluginContext, _env: any, tasks: RenderTask[]): Promise<void> {
+    const unrenderable: string[] = [];
     const pool = new Pool(8);
     await pool.run(tasks, async (task) => {
-      if (!task.copy) return;
-      ctx.log.debug(`copy ${task.outPath}`);
+      if (!task.copy) {
+        unrenderable.push(task.outPath);
+        return;
+      }
+      ctx.log.debug(`fallback copy ${task.outPath}`);
       await writeBytes(task.outPath, task.copy.content);
     });
+    if (unrenderable.length > 0) {
+      throw new Error(
+        `${unrenderable.length} page task(s) reached the fallback deployer (e.g. "${unrenderable[0]}") — ` +
+          `no deployer claimed page rendering. Declare a page deployer (ngwg-deployer-v1, e.g. Ngwg-files) ` +
+          `before the fallback in ngwg.yaml.`,
+      );
+    }
   },
 };
 
-export default { parsers: [markdownParser], deployers: [templateDeployer, assetDeployer] };
+export default { parsers: [markdownParser], deployers: [templateDeployer, fallbackDeployer] };
