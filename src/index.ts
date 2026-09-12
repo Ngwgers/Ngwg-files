@@ -22,6 +22,8 @@ interface PluginContext {
   rootDir: string;
   log: { info(m: string): void; warn(m: string): void; error(m: string): void; debug(m: string): void };
   yaml: { parse(text: string): any };
+  /** path relative to the configured source directory (posix separators) */
+  relPath(filePath: string): string;
   [k: string]: any;
 }
 
@@ -57,7 +59,7 @@ export const markdownParser = {
 
   async parseFile(ctx: PluginContext, filePath: string, content: Uint8Array): Promise<SourceObject | null> {
     const text = new TextDecoder().decode(content);
-    const relPath = path.relative(ctx.rootDir, filePath).replace(/\\/g, "/");
+    const relToSource = ctx.relPath(filePath);
 
     // frontmatter (YAML parsing uses the parser shipped with Ngwg-core)
     let meta: Record<string, any> = {};
@@ -77,7 +79,6 @@ export const markdownParser = {
     const base = path.basename(filePath, ext);
 
     // kind: files under source/_posts/ are posts, everything else is a page
-    const relToSource = relPath.replace(/^source\//, "");
     const isPost = relToSource.startsWith(`${POSTS_DIR}/`);
     const kind: SourceObject["kind"] = isPost ? "post" : "page";
 
