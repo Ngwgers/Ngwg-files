@@ -1,13 +1,14 @@
-// Ngwg-files — must-load Ngwg plugin implementing two protocols:
+// Ngwg-files — must-load Ngwg plugin implementing two protocols via units:
 //
-//   ngwg-parser-v1   : markdown/frontmatter source files → SourceObjects
-//   ngwg-deployer-v1 : RenderTasks → rendered files under public/
-//                      (mustache-style templates; see template.ts)
+//   ngwg-parser-v1   : ngwg-markdown-parser — markdown/frontmatter source
+//                      files → SourceObjects
+//   ngwg-deployer-v1 : ngwg-template-deployer — page tasks → rendered files
+//                      under public/ (mustache-style templates; see template.ts)
+//                      ngwg-asset-deployer — asset tasks → verbatim copies
 //
-// The plugin intentionally implements only these two protocols — a plugin
-// may implement any subset of the available protocols. It is fully
-// self-contained: no imports from Ngwg-core, so it can be distributed and
-// installed as a standalone repository.
+// Every unit is independent and declares the files/tasks it handles; the
+// module itself is fully self-contained: no imports from Ngwg-core, so it
+// can be distributed and installed as a standalone repository.
 
 import * as path from "node:path";
 import { Pool } from "./pool.ts";
@@ -44,14 +45,13 @@ interface RenderTask {
   copy?: { content: Uint8Array };
 }
 
-// --- parser (ngwg-parser-v1) ------------------------------------------------
+// --- parser unit (ngwg-parser-v1) --------------------------------------------
 
 const POSTS_DIR = "_posts";
 const DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})-(.+)$/;
 
-export const parser = {
-  protocol: "ngwg-parser-v1" as const,
-  name: "files",
+export const markdownParser = {
+  name: "ngwg-markdown-parser",
   version: "0.1.0",
   extensions: [".md", ".markdown"],
 
@@ -195,22 +195,20 @@ function segEndMarker(next: string | null): string {
   return next ? `<div class="post-seg-end" data-next="${next}"></div>` : "";
 }
 
-// --- deployer (ngwg-deployer-v1) ---------------------------------------------
+// --- deployer units (ngwg-deployer-v1) ---------------------------------------
 
-export const deployer = {
-  protocol: "ngwg-deployer-v1" as const,
-  name: "files",
+// Renders "page" tasks (theme layout + context) through the mustache-style
+// template engine, including long-post segmentation.
+export const templateDeployer = {
+  name: "ngwg-template-deployer",
   version: "0.1.0",
+  types: ["page" as const],
 
   async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
     const pool = new Pool(8);
     const segThreshold = Number(env.theme?.config?.segment_threshold ?? SEGMENT_DEFAULT_THRESHOLD);
     await pool.run(tasks, async (task) => {
       ctx.log.debug(`write ${task.outPath}`);
-      if (task.copy) {
-        await writeBytes(task.outPath, task.copy.content);
-        return;
-      }
       const layoutName = task.template ?? "index";
       let tpl = env.theme.layouts[layoutName];
       if (tpl === undefined) {
@@ -248,4 +246,20 @@ export const deployer = {
   },
 };
 
-export default { plugins: [parser, deployer] };
+// Copies "asset" tasks verbatim (theme assets, source files no parser claimed).
+export const assetDeployer = {
+  name: "ngwg-asset-deployer",
+  version: "0.1.0",
+  types: ["asset" as const],
+
+  async deploy(ctx: PluginContext, _env: any, tasks: RenderTask[]): Promise<void> {
+    const pool = new Pool(8);
+    await pool.run(tasks, async (task) => {
+      if (!task.copy) return;
+      ctx.log.debug(`copy ${task.outPath}`);
+      await writeBytes(task.outPath, task.copy.content);
+    });
+  },
+};
+
+export default { parsers: [markdownParser], deployers: [templateDeployer, assetDeployer] };
