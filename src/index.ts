@@ -233,7 +233,7 @@ export const markdownParser = {
 // a long article never has to be downloaded in one piece.
 
 export const SEGMENT_DEFAULT_THRESHOLD = 8000;
-export const SEGMENT_SIZE = 6000;
+export const SEGMENT_SIZE = 4000;
 
 /**
  * Split rendered HTML into segments at *top-level* block boundaries
