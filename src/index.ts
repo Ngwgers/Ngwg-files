@@ -7,6 +7,8 @@
 //                      markdown links rewritten to those absolute URLs)
 //   ngwg-deployer-v1 : ngwg-template-deployer — page tasks → rendered files
 //                      under public/ (mustache-style templates; see template.ts)
+//                      renders with the theme's i18n strings for the selected
+//                      language (see resolveI18n)
 //                      ngwg-fallback-deployer — safety net copying any task
 //                      no other deployer claimed
 //
@@ -273,6 +275,69 @@ function segEndMarker(next: string | null): string {
   return next ? `<div class="post-seg-end" data-next="${next}"></div>` : "";
 }
 
+// --- i18n (theme translation strings) ----------------------------------------
+//
+// Core reads the theme's i18n/<lang>.yaml files and the requested language
+// (config `language` or $NGWG_LANG) and hands both over via the deploy env.
+// The deployer resolves the final language — requested → theme default →
+// first available — deep-merges the default language under the selected one
+// and injects the result into every page's root render context as `t`, next
+// to `language` (canonical lang_REGION, e.g. "zh_CN") and `langAttr`
+// (BCP-47 style for <html lang>, e.g. "zh-CN"). A theme without i18n files
+// simply renders with an empty `t`.
+
+function normalizeLangTag(raw: string | undefined | null): string {
+  if (typeof raw !== "string") return "";
+  const s = raw.trim().split(/[.@]/)[0];
+  const parts = s.replace(/-/g, "_").split("_").filter(Boolean);
+  if (parts.length === 0 || !/^[a-z]+$/i.test(parts[0])) return "";
+  const lang = parts[0].toLowerCase();
+  if (parts[1] === undefined) return lang;
+  return /^[a-z0-9]+$/i.test(parts[1]) ? `${lang}_${parts[1].toUpperCase()}` : lang;
+}
+
+function deepMergeStrings(base: any, over: any): any {
+  if (over === undefined || over === null) return base;
+  const plain =
+    (v: any) => typeof v === "object" && v !== null && !Array.isArray(v);
+  if (!plain(base) || !plain(over)) return over;
+  const out: any = { ...base };
+  for (const [k, v] of Object.entries(over)) out[k] = deepMergeStrings(out[k], v);
+  return out;
+}
+
+/**
+ * Resolve the theme i18n strings for a deploy run. Returns the merged string
+ * table plus the resolved language tag ("" when the theme ships no i18n).
+ */
+export function resolveI18n(
+  i18n: Record<string, Record<string, any>>,
+  requested: string | undefined,
+  defaultLanguage: string | undefined,
+): { strings: Record<string, any>; language: string } {
+  const keys = Object.keys(i18n);
+  if (keys.length === 0) return { strings: {}, language: "" };
+
+  // exact lang_REGION → bare language → any region variant of that language
+  const pick = (tag: string | undefined): string | undefined => {
+    if (!tag) return undefined;
+    if (keys.includes(tag)) return tag;
+    const lang = tag.split("_")[0];
+    if (lang !== tag && keys.includes(lang)) return lang;
+    return keys.filter((k) => k.startsWith(`${lang}_`)).sort()[0];
+  };
+
+  const def = normalizeLangTag(defaultLanguage);
+  const layers = [...new Set([pick(def), pick(requested)].filter((k): k is string => !!k))];
+  if (layers.length > 0) {
+    let strings: Record<string, any> = {};
+    for (const k of layers) strings = deepMergeStrings(strings, i18n[k]);
+    return { strings, language: layers[layers.length - 1] };
+  }
+  // nothing matched (or nothing requested/declared): deterministic first key
+  return { strings: i18n[keys.sort()[0]], language: keys.sort()[0] };
+}
+
 // --- deployer units (ngwg-deployer-v1) ---------------------------------------
 
 // Renders "page" tasks (theme layout + context) through the mustache-style
@@ -285,6 +350,24 @@ export const templateDeployer = {
   async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
     const pool = new Pool(8);
     const segThreshold = Number(env.theme?.config?.segment_threshold ?? SEGMENT_DEFAULT_THRESHOLD);
+
+    // i18n: resolve the language for this whole deploy run
+    const i18n: Record<string, Record<string, any>> = env.theme?.i18n ?? {};
+    const requested = typeof env.language === "string" && env.language ? env.language : undefined;
+    const { strings: tStrings, language } = resolveI18n(i18n, requested, env.theme?.config?.default_language);
+    if (requested && language && language !== requested && !language.startsWith(`${requested.split("_")[0]}_`)) {
+      ctx.log.warn(
+        `language "${requested}" has no i18n file in this theme (available: ${Object.keys(i18n).sort().join(", ") || "none"}) — ` +
+          `rendering with "${language}". Set "language" in ngwg.yaml or $NGWG_LANG to an available language.`,
+      );
+    } else if (!requested && !env.theme?.config?.default_language && Object.keys(i18n).length > 1) {
+      ctx.log.warn(
+        `theme i18n has ${Object.keys(i18n).length} languages and neither "language" (ngwg.yaml) nor $NGWG_LANG nor ` +
+          `theme.yaml "default_language" is set — using "${language}". Declare default_language in theme.yaml.`,
+      );
+    }
+    const langAttr = language.replace(/_/g, "-");
+
     await pool.run(tasks, async (task) => {
       ctx.log.debug(`write ${task.outPath}`);
       const layoutName = task.template ?? "index";
@@ -318,7 +401,11 @@ export const templateDeployer = {
         }
       }
 
-      const html = render(tpl, task.context ?? {}, env.helpers, env.theme.partials);
+      // root render context: the task context plus the reserved i18n keys —
+      // `t` (string table), `language` (lang_REGION) and `langAttr` (for
+      // <html lang>). Helpers receive this object as `this`.
+      const context = { ...(task.context ?? {}), t: tStrings, language, langAttr };
+      const html = render(tpl, context, env.helpers, env.theme.partials);
       await writeText(task.outPath, html);
     });
   },

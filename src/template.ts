@@ -8,15 +8,21 @@
 //   {{> partialName }}    include a theme partial
 //   {{@ helper a b "c"}}  call a helper exposed by ngwg-helper-v1 plugins
 //
-// Arguments may be quoted strings, numbers, booleans, or context paths.
+// Arguments may be quoted strings (taken literally — i18n keys like
+// "archive.title" are not context paths), numbers, booleans, or context
+// paths. Helpers are invoked with `this` bound to the page's root context,
+// where the deployer places the i18n strings (`t`) and the resolved
+// `language`/`langAttr`.
+
+type HelperArg = { value: string; quoted: boolean };
 
 type Node =
   | { type: "text"; text: string }
   | { type: "var"; path: string; raw: boolean }
-  | { type: "helper"; name: string; args: string[]; raw: boolean }
+  | { type: "helper"; name: string; args: HelperArg[]; raw: boolean }
   | { type: "each"; path: string; body: Node[] }
   | { type: "if"; path: string; body: Node[]; elseBody: Node[] }
-  | { type: "if-helper"; name: string; args: string[]; body: Node[]; elseBody: Node[] }
+  | { type: "if-helper"; name: string; args: HelperArg[]; body: Node[]; elseBody: Node[] }
   | { type: "partial"; name: string };
 
 export interface TemplateEnv {
@@ -96,7 +102,7 @@ function parseNodes(toks: Tok[], start: number, stop: string[] | null): [Node[],
         // helper call as condition: {{#if @ size site.tags }}
         const parts = splitArgs(cond.slice(2).trim());
         if (parts.length === 0) throw new Error("template: empty helper condition {{#if @ }}");
-        nodes.push({ type: "if-helper", name: parts[0], args: parts.slice(1), body, elseBody });
+        nodes.push({ type: "if-helper", name: parts[0].value, args: parts.slice(1), body, elseBody });
       } else {
         nodes.push({ type: "if", path: cond, body, elseBody });
       }
@@ -111,7 +117,7 @@ function parseNodes(toks: Tok[], start: number, stop: string[] | null): [Node[],
     if (v.startsWith("@ ")) {
       const parts = splitArgs(v.slice(2).trim());
       if (parts.length === 0) throw new Error("template: empty helper call {{@ }}");
-      nodes.push({ type: "helper", name: parts[0], args: parts.slice(1), raw: tok.raw });
+      nodes.push({ type: "helper", name: parts[0].value, args: parts.slice(1), raw: tok.raw });
       i++;
       continue;
     }
@@ -123,29 +129,53 @@ function parseNodes(toks: Tok[], start: number, stop: string[] | null): [Node[],
   return [nodes, i];
 }
 
-function splitArgs(s: string): string[] {
-  const out: string[] = [];
+function splitArgs(s: string): { value: string; quoted: boolean }[] {
+  const out: { value: string; quoted: boolean }[] = [];
   let cur = "";
   let quote: string | null = null;
+  let quoted = false;
+  const push = () => {
+    if (cur) out.push({ value: cur, quoted });
+    cur = "";
+    quoted = false;
+  };
   for (const c of s) {
     if (quote) {
-      cur += c;
-      if (c === quote) quote = null;
+      if (c === quote) {
+        quote = null;
+        push(); // a quoted token ends at its closing quote
+      } else {
+        cur += c;
+      }
       continue;
     }
     if (c === '"' || c === "'") {
       quote = c;
+      quoted = true;
       continue;
     }
     if (/\s/.test(c)) {
-      if (cur) out.push(cur);
-      cur = "";
+      push();
       continue;
     }
     cur += c;
   }
-  if (cur) out.push(cur);
+  push();
   return out;
+}
+
+/**
+ * Resolve one helper argument: numbers/booleans/null by literal, a quoted
+ * string as its literal value (i18n keys like "archive.title" must NOT be
+ * treated as context paths), anything else as a context path lookup.
+ */
+function resolveArg(arg: { value: string; quoted: boolean }, stack: any[]): any {
+  if (arg.quoted) return arg.value;
+  if (/^-?\d+(\.\d+)?$/.test(arg.value)) return Number(arg.value);
+  if (arg.value === "true") return true;
+  if (arg.value === "false") return false;
+  if (arg.value === "null") return null;
+  return lookup(stack, arg.value);
 }
 
 function getPath(obj: any, path: string): any {
@@ -216,14 +246,10 @@ function renderNodes(nodes: Node[], stack: any[], env: TemplateEnv): string {
         if (typeof fn !== "function") {
           throw new Error(`template: unknown helper "${node.name}" — is the providing plugin loaded?`);
         }
-        const args = node.args.map((a) => {
-          if (/^-?\d+(\.\d+)?$/.test(a)) return Number(a);
-          if (a === "true") return true;
-          if (a === "false") return false;
-          if (a === "null") return null;
-          return lookup(stack, a);
-        });
-        const val = fn(...args);
+        const args = node.args.map((a) => resolveArg(a, stack));
+        // helpers run with `this` bound to the page's root context — that is
+        // how the i18n helper t reaches the page's translation strings
+        const val = fn.call(stack[0], ...args);
         if (val === undefined || val === null) continue;
         const str = typeof val === "object" ? JSON.stringify(val) : String(val);
         out += node.raw ? str : escapeHtml(str);
@@ -259,14 +285,8 @@ function renderNodes(nodes: Node[], stack: any[], env: TemplateEnv): string {
         if (typeof fn !== "function") {
           throw new Error(`template: unknown helper "${node.name}" in {{#if @ …}} — is the providing plugin loaded?`);
         }
-        const args = node.args.map((a) => {
-          if (/^-?\d+(\.\d+)?$/.test(a)) return Number(a);
-          if (a === "true") return true;
-          if (a === "false") return false;
-          if (a === "null") return null;
-          return lookup(stack, a);
-        });
-        if (truthy(fn(...args))) out += renderNodes(node.body, stack, env);
+        const args = node.args.map((a) => resolveArg(a, stack));
+        if (truthy(fn.call(stack[0], ...args))) out += renderNodes(node.body, stack, env);
         else out += renderNodes(node.elseBody, stack, env);
         break;
       }
