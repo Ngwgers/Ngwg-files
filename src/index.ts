@@ -11,9 +11,11 @@
 //                      language (see resolveI18n)
 //                      ngwg-fallback-deployer — safety net copying any task
 //                      no other deployer claimed
-//   ngwg-option-v1   : files-options — publishes the chunk_size option
-//                      (long-post segmentation target length; negative
-//                      disables segmentation)
+//   ngwg-option-v1   : files-options — publishes the chunk_size (long-post
+//                      segmentation target length; negative disables
+//                      segmentation) and segment_threshold (body length above
+//                      which a post is segmented; wins over the theme's own
+//                      segment_threshold) options
 //
 // Every unit is independent and declares the files/tasks it handles; the
 // module itself is fully self-contained: no imports from Ngwg-core, so it
@@ -352,7 +354,12 @@ export const templateDeployer = {
 
   async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
     const pool = new Pool(8);
-    const segThreshold = Number(env.theme?.config?.segment_threshold ?? SEGMENT_DEFAULT_THRESHOLD);
+    // segment threshold: plugin option (plugins.files.option.segment_threshold)
+    // wins over the theme's own segment_threshold; non-finite values fall back
+    const rawThreshold = (ctx.options as any)?.self?.segment_threshold ?? env.theme?.config?.segment_threshold;
+    const segThreshold = rawThreshold === undefined || !Number.isFinite(Number(rawThreshold))
+      ? SEGMENT_DEFAULT_THRESHOLD
+      : Number(rawThreshold);
     // chunk_size plugin option (plugins.<name>.option.chunk_size): target
     // segment length; any negative value disables segmentation entirely
     const rawChunk = (ctx.options as any)?.self?.chunk_size;
@@ -449,13 +456,15 @@ export const fallbackDeployer = {
   },
 };
 
-// ngwg-option-v1: opts in to the option system and publishes chunk_size —
-// the target segment length for long-post segmentation (any negative value
-// disables segmentation; the per-post no_segment frontmatter still wins).
+// ngwg-option-v1: opts in to the option system and publishes chunk_size (the
+// target segment length for long-post segmentation; any negative value
+// disables segmentation; the per-post no_segment frontmatter still wins) and
+// segment_threshold (the body length above which a post is segmented; wins
+// over the theme's own segment_threshold).
 export const options = {
   name: "files-options",
-  version: "0.2.1",
-  public: ["chunk_size"],
+  version: "0.2.2",
+  public: ["chunk_size", "segment_threshold"],
   private: [],
   readShared: false,
 };
