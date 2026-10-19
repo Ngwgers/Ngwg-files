@@ -11,6 +11,7 @@
     "@mdit/plugin-mark": "^0.16.0",
     "@mdit/plugin-sub": "^0.16.0",
     "@mdit/plugin-sup": "^0.16.0",
+    "ejs": "^7.0.2",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.1.0",
     "markdown-it-admonition": "^1.0.4",

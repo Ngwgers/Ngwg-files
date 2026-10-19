@@ -33,6 +33,21 @@ import anchor from "markdown-it-anchor";
 实现 ngwg-deployer-v1 。
 
 本模块负责基本渲染页面任务，对基本页面使用自实现的 mustache 风格模板引擎。
+模板源码中出现 EJS 标签（`<% … %>`）时改用 npm 的 `ejs` 包渲染，因此主题
+可以逐个 layout/partial 混合两种语言：
+
+| mustache | EJS |
+| --- | --- |
+| `{{ x }}` | `<%= x %>` |
+| `{{{ x }}}` | `<%- x %>` |
+| `{{@ helper a b }}` | `<%= h.helper(a, b) %>`（helper 以 `h` 暴露，`this` 绑定页面根上下文） |
+| `{{ t.key }}` | `<%= t.key %>` |
+| `{{> name }}` | `<%- include('name') %>`（两种语言的 partial 都能包含） |
+
+include 只从主题内存中的 partial 表解析，未知名字直接报错，绝不读写文件系统。
+
+引擎按源码选择：出现 `<%` 即按 EJS 渲染，否则按 mustache 渲染（模板按去扩展名的
+文件名解析，引擎不看扩展名）。因此需要在模板中字面展示 `<%` 时要自行转义。
 
 **长文分段**：渲染超过 `segment_threshold`（主题配置，默认 8000 字符）的文章时，
 正文按顶层块边界切段：页面只带第一段，其余写入 `seg/N.html` 片段供主题懒加载。

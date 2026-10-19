@@ -6,7 +6,9 @@
 //                      re-homed to /assets/images/<hash>-<name> and the
 //                      markdown links rewritten to those absolute URLs)
 //   ngwg-deployer-v1 : ngwg-template-deployer — page tasks → rendered files
-//                      under public/ (mustache-style templates; see template.ts)
+//                      under public/ (mustache-style templates by default;
+//                      sources using EJS tags are rendered by the npm `ejs`
+//                      package instead — see template.ts / ejs.ts)
 //                      renders with the theme's i18n strings for the selected
 //                      language (see resolveI18n)
 //                      ngwg-fallback-deployer — safety net copying any task
@@ -27,6 +29,7 @@ import { readFile } from "node:fs/promises";
 import { Pool } from "./pool.ts";
 import { markdownToHtml, markdownTitle, splitMoreMarker } from "./markdown.ts";
 import { render } from "./template.ts";
+import { isEjsTemplate, renderEjs } from "./ejs.ts";
 import { writeBytes, writeText } from "./write.ts";
 
 // --- minimal structural types (mirror of Ngwg-core protocol definitions) ---
@@ -420,7 +423,10 @@ export const templateDeployer = {
       // `t` (string table), `language` (lang_REGION) and `langAttr` (for
       // <html lang>). Helpers receive this object as `this`.
       const context = { ...(task.context ?? {}), t: tStrings, language, langAttr };
-      const html = render(tpl, context, env.helpers, env.theme.partials);
+      const partials = env.theme.partials ?? {};
+      const html = isEjsTemplate(tpl)
+        ? renderEjs(tpl, context, env.helpers, partials)
+        : render(tpl, context, env.helpers, partials);
       await writeText(task.outPath, html);
     });
   },
