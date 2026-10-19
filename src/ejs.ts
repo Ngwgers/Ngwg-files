@@ -18,11 +18,28 @@
 // filesystem). Helpers are bound with `this` set to the page root context —
 // that is how the i18n helper `t` reaches the selected language's string
 // table (`this.t`).
+//
+// npm dependencies: a theme may declare packages in its own package.json (e.g.
+// the icon sets the original theme uses). The deployer hands the engine a
+// module loader rooted at the *theme directory* (`options.require`), exposed to
+// templates as `require`, so a layout/partial can use them without the theme
+// vendoring any of their data. Templates cannot do this on their own: the
+// engine's include/scope sandbox has no module resolution and no theme path.
 
 import ejs from "ejs";
 import { render } from "./template.ts";
 
 export type HelperMap = Record<string, any>;
+
+export interface EjsRenderOptions {
+  /**
+   * Theme-scoped module loader: bare specifiers resolve from the theme
+   * directory's node_modules. Exposed to the template as `require(id)`.
+   * Absent when the caller has no theme root — templates then see the
+   * host's own `require`, if any.
+   */
+  require?: (id: string) => any;
+}
 
 /** Suffixes rendered by the EJS engine (kept in sync with the EJS unit). */
 export const EJS_EXTENSIONS = [".ejs"];
@@ -50,6 +67,7 @@ export function renderEjs(
   helpers: HelperMap = {},
   partials: Record<string, string> = {},
   partialExts: Record<string, string> = {},
+  options: EjsRenderOptions = {},
 ): string {
   // helpers run with `this` bound to the page root context, exactly like the
   // mustache engine — the i18n helper `t` relies on reaching `this.t`
@@ -64,11 +82,14 @@ export function renderEjs(
     if (src === undefined) throw new Error(`template: unknown partial "${name}"`);
     const ctx = extra ? { ...context, ...extra } : context;
     return isEjsExt(partialExts[name])
-      ? renderEjs(src, ctx, helpers, partials, partialExts)
+      ? renderEjs(src, ctx, helpers, partials, partialExts, options)
       : render(src, ctx, helpers, partials);
   };
 
-  const locals = { ...context, h: bound, partial };
+  const locals: Record<string, any> = { ...context, h: bound, partial };
+  // the loader is EJS-only and is not part of the (data) page context, so it
+  // is added here instead of being threaded through every caller
+  if (options.require) locals.require = options.require;
 
   return ejs.render(template, locals, {
     filename: "theme-layout.ejs",

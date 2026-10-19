@@ -11,6 +11,10 @@
 //                      mustache-style rendering (see template.ts / ejs.ts)
 //                      renders with the theme's i18n strings for the selected
 //                      language (see resolveI18n)
+//                      the EJS engine also gets a module loader rooted at the
+//                      theme directory (env.theme.root), exposed to templates
+//                      as `require` — that is how a theme uses the npm
+//                      packages declared in its own package.json
 //                      ngwg-fallback-deployer — safety net copying any task
 //                      no other deployer claimed
 //   ngwg-option-v1   : files-options — publishes the chunk_size (long-post
@@ -25,6 +29,7 @@
 
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { Pool } from "./pool.ts";
 import { markdownToHtml, markdownTitle, splitMoreMarker } from "./markdown.ts";
@@ -363,6 +368,12 @@ function makePageDeployer(engine: "ejs" | "mustache") {
 
     async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
       const pool = new Pool(8);
+      // theme-scoped module loader: an EJS template resolves bare specifiers
+      // from the theme's own node_modules (the packages its package.json
+      // declares). Core installs missing theme dependencies before this point.
+      const themeRoot = typeof env.theme?.root === "string" ? env.theme.root : undefined;
+      const moduleLoader =
+        engine === "ejs" && themeRoot ? createRequire(path.join(themeRoot, "package.json")) : undefined;
       // segment threshold: plugin option (plugins.files.option.segment_threshold)
       // wins over the theme's own segment_threshold; non-finite values fall back
       const rawThreshold = (ctx.options as any)?.self?.segment_threshold ?? env.theme?.config?.segment_threshold;
@@ -433,7 +444,7 @@ function makePageDeployer(engine: "ejs" | "mustache") {
         const partialExts = env.theme?.partialExts ?? {};
         const html =
           engine === "ejs"
-            ? renderEjs(tpl, context, env.helpers, partials, partialExts)
+            ? renderEjs(tpl, context, env.helpers, partials, partialExts, { require: moduleLoader })
             : render(tpl, context, env.helpers, partials);
         await writeText(task.outPath, html);
       });
