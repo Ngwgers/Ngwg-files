@@ -1,7 +1,7 @@
 name: files
 version: 0.2.1
 entry: src/index.ts
-description: "Must-load plugin: parses markdown/frontmatter sources and deploys rendered pages to public/ using a mustache-style template engine (EJS sources are rendered by the npm ejs package)"
+description: "Must-load plugin: parses markdown/frontmatter sources and deploys rendered pages to public/ (mustache-style engine, plus an EJS unit for .ejs layouts)"
 protocols:
   - ngwg-parser-v1
   - ngwg-deployer-v1

@@ -1,10 +1,10 @@
 // EJS integration for the Ngwg-files template deployer.
 //
-// Themes may mix template languages: a layout/partial whose source contains
-// an EJS tag (`<% … %>`) is rendered by the npm `ejs` package, everything
-// else by the built-in mustache-style engine (template.ts). The choice is
-// made per source string — the theme loader keys templates by their
-// extensionless file name, so the extension is not available here.
+// The engine is chosen by *file suffix*, not by inspecting template syntax:
+// the EJS unit declares `templateExtensions: [".ejs"]`, the mustache unit
+// claims every other page layout. Inside an EJS layout, includes are
+// dispatched per partial suffix the same way (a `.ejs` partial is rendered by
+// EJS, anything else by the mustache engine).
 //
 // Conversion rules (mustache → EJS):
 //   {{ x }}            → <%= x %>          HTML-escaped output
@@ -15,19 +15,20 @@
 //   {{#each xs }}…{{/each }} / {{#if x }}…{{/if }} → JS `for` / `if`
 //
 // Includes are resolved through the in-memory theme partials only (never the
-// filesystem), and are dispatched at runtime so a single EJS layout can
-// include mustache partials (and vice versa). Helpers are bound with `this`
-// set to the page root context — that is how the i18n helper `t` reaches the
-// selected language's string table (`this.t`).
+// filesystem). Helpers are bound with `this` set to the page root context —
+// that is how the i18n helper `t` reaches the selected language's string
+// table (`this.t`).
 
 import ejs from "ejs";
 import { render } from "./template.ts";
 
 export type HelperMap = Record<string, any>;
 
-/** True when the source uses at least one EJS tag (drives engine selection). */
-export function isEjsTemplate(src: string): boolean {
-  return /<%/.test(src);
+/** Suffixes rendered by the EJS engine (kept in sync with the EJS unit). */
+export const EJS_EXTENSIONS = [".ejs"];
+
+function isEjsExt(ext: string | undefined): boolean {
+  return ext !== undefined && EJS_EXTENSIONS.includes(ext.toLowerCase());
 }
 
 function resourceName(includePath: string): string {
@@ -40,13 +41,15 @@ function resourceName(includePath: string): string {
  * Render an EJS template. `context` is the page root scope (site/page/t/
  * language/langAttr…); `helpers` is the merged helper table exposed to the
  * template as `h` and bound to `context`; `partials` maps partial names to
- * their source (any engine).
+ * their source and `partialExts` maps them to their source suffix (any
+ * engine).
  */
 export function renderEjs(
   template: string,
   context: Record<string, any>,
   helpers: HelperMap = {},
   partials: Record<string, string> = {},
+  partialExts: Record<string, string> = {},
 ): string {
   // helpers run with `this` bound to the page root context, exactly like the
   // mustache engine — the i18n helper `t` relies on reaching `this.t`
@@ -55,12 +58,14 @@ export function renderEjs(
     bound[name] = typeof fn === "function" ? fn.bind(context) : fn;
   }
 
-  // unified partial dispatcher: picks the engine per partial source
+  // unified partial dispatcher: picks the engine per partial suffix
   const partial = (name: string, extra?: Record<string, any>): string => {
     const src = partials[name];
     if (src === undefined) throw new Error(`template: unknown partial "${name}"`);
     const ctx = extra ? { ...context, ...extra } : context;
-    return isEjsTemplate(src) ? renderEjs(src, ctx, helpers, partials) : render(src, ctx, helpers, partials);
+    return isEjsExt(partialExts[name])
+      ? renderEjs(src, ctx, helpers, partials, partialExts)
+      : render(src, ctx, helpers, partials);
   };
 
   const locals = { ...context, h: bound, partial };

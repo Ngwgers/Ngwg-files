@@ -29,12 +29,20 @@ import anchor from "markdown-it-anchor";
 并在首页等位置显示。此功能不会导致文章被切割。
 
 
-### ngwg-template-deployer
+### ngwg-ejs-deployer / ngwg-template-deployer
 实现 ngwg-deployer-v1 。
 
-本模块负责基本渲染页面任务，对基本页面使用自实现的 mustache 风格模板引擎。
-模板源码中出现 EJS 标签（`<% … %>`）时改用 npm 的 `ejs` 包渲染，因此主题
-可以逐个 layout/partial 混合两种语言：
+两个 deployer 单元按 **layout 源码后缀** 分发页面任务（协议字段
+`templateExtensions`）：
+
+* `ngwg-ejs-deployer`：声明 `templateExtensions: [".ejs"]`，用 npm 的 `ejs`
+  包渲染 `.ejs` 布局；
+* `ngwg-template-deployer`：不声明后缀（认领其余任意后缀的布局），使用自实现的
+  mustache 风格模板引擎。
+
+两个单元声明顺序为 EJS 在前、mustache 在后，因此 `.ejs` 布局先被 EJS 单元认领，
+其余布局由 mustache 单元兜底；主题因此可以逐个 layout 选择语言。EJS 布局内的
+`include` 也按 partial 后缀分发：`.ejs` partial 走 EJS，其余走 mustache：
 
 | mustache | EJS |
 | --- | --- |
@@ -46,8 +54,8 @@ import anchor from "markdown-it-anchor";
 
 include 只从主题内存中的 partial 表解析，未知名字直接报错，绝不读写文件系统。
 
-引擎按源码选择：出现 `<%` 即按 EJS 渲染，否则按 mustache 渲染（模板按去扩展名的
-文件名解析，引擎不看扩展名）。因此需要在模板中字面展示 `<%` 时要自行转义。
+引擎只看扩展名，不再按模板内容猜测：需要在模板中字面展示 `<%` 时无需额外转义
+（非 `.ejs` 文件不会进入 EJS）。
 
 **长文分段**：渲染超过 `segment_threshold`（主题配置，默认 8000 字符）的文章时，
 正文按顶层块边界切段：页面只带第一段，其余写入 `seg/N.html` 片段供主题懒加载。

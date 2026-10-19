@@ -5,10 +5,10 @@
 //                      derived object per referenced local image; images are
 //                      re-homed to /assets/images/<hash>-<name> and the
 //                      markdown links rewritten to those absolute URLs)
-//   ngwg-deployer-v1 : ngwg-template-deployer — page tasks → rendered files
-//                      under public/ (mustache-style templates by default;
-//                      sources using EJS tags are rendered by the npm `ejs`
-//                      package instead — see template.ts / ejs.ts)
+//   ngwg-deployer-v1 : ngwg-ejs-deployer — page tasks whose layout has the
+//                      .ejs suffix → rendered by the npm `ejs` package
+//                      ngwg-template-deployer — every other page task →
+//                      mustache-style rendering (see template.ts / ejs.ts)
 //                      renders with the theme's i18n strings for the selected
 //                      language (see resolveI18n)
 //                      ngwg-fallback-deployer — safety net copying any task
@@ -29,7 +29,7 @@ import { readFile } from "node:fs/promises";
 import { Pool } from "./pool.ts";
 import { markdownToHtml, markdownTitle, splitMoreMarker } from "./markdown.ts";
 import { render } from "./template.ts";
-import { isEjsTemplate, renderEjs } from "./ejs.ts";
+import { EJS_EXTENSIONS, renderEjs } from "./ejs.ts";
 import { writeBytes, writeText } from "./write.ts";
 
 // --- minimal structural types (mirror of Ngwg-core protocol definitions) ---
@@ -347,89 +347,113 @@ export function resolveI18n(
 }
 
 // --- deployer units (ngwg-deployer-v1) ---------------------------------------
+//
+// Page tasks are dispatched by *layout suffix*, not by sniffing template
+// syntax: the EJS unit declares templateExtensions [".ejs"], the mustache
+// unit claims every other page layout. Both units share the same render
+// pipeline (i18n resolution, layout fallback, long-post segmentation); only
+// the final render call differs.
 
-// Renders "page" tasks (theme layout + context) through the mustache-style
-// template engine, including long-post segmentation.
+function makePageDeployer(engine: "ejs" | "mustache") {
+  return {
+    types: ["page" as const],
+    // .ejs layouts go to this unit; the mustache unit has no constraint and
+    // claims what is left (it is declared after the EJS unit)
+    ...(engine === "ejs" ? { templateExtensions: [...EJS_EXTENSIONS] } : {}),
+
+    async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
+      const pool = new Pool(8);
+      // segment threshold: plugin option (plugins.files.option.segment_threshold)
+      // wins over the theme's own segment_threshold; non-finite values fall back
+      const rawThreshold = (ctx.options as any)?.self?.segment_threshold ?? env.theme?.config?.segment_threshold;
+      const segThreshold = rawThreshold === undefined || !Number.isFinite(Number(rawThreshold))
+        ? SEGMENT_DEFAULT_THRESHOLD
+        : Number(rawThreshold);
+      // chunk_size plugin option (plugins.<name>.option.chunk_size): target
+      // segment length; any negative value disables segmentation entirely
+      const rawChunk = (ctx.options as any)?.self?.chunk_size;
+      const chunkSize = rawChunk === undefined ? SEGMENT_SIZE : Number(rawChunk);
+      const segmentationEnabled = Number.isFinite(chunkSize) && chunkSize >= 0;
+
+      // i18n: resolve the language for this whole deploy run
+      const i18n: Record<string, Record<string, any>> = env.theme?.i18n ?? {};
+      const requested = typeof env.language === "string" && env.language ? env.language : undefined;
+      const { strings: tStrings, language } = resolveI18n(i18n, requested, env.theme?.config?.default_language);
+      if (requested && language && language !== requested && !language.startsWith(`${requested.split("_")[0]}_`)) {
+        ctx.log.warn(
+          `language "${requested}" has no i18n file in this theme (available: ${Object.keys(i18n).sort().join(", ") || "none"}) — ` +
+            `rendering with "${language}". Set "language" in ngwg.yaml or $NGWG_LANG to an available language.`,
+        );
+      } else if (!requested && !env.theme?.config?.default_language && Object.keys(i18n).length > 1) {
+        ctx.log.warn(
+          `theme i18n has ${Object.keys(i18n).length} languages and neither "language" (ngwg.yaml) nor $NGWG_LANG nor ` +
+            `theme.yaml "default_language" is set — using "${language}". Declare default_language in theme.yaml.`,
+        );
+      }
+      const langAttr = language.replace(/_/g, "-");
+
+      await pool.run(tasks, async (task) => {
+        ctx.log.debug(`write ${task.outPath}`);
+        const layoutName = task.template ?? "index";
+        let tpl = env.theme.layouts[layoutName];
+        if (tpl === undefined) {
+          // graceful fallbacks: page/post → index
+          if (env.theme.layouts.index !== undefined && (layoutName === "page" || layoutName === "post")) {
+            tpl = env.theme.layouts.index;
+            ctx.log.warn(`layout "${layoutName}" not found in theme — falling back to "index"`);
+          } else {
+            throw new Error(
+              `layout "${layoutName}" not found in theme (available: ${Object.keys(env.theme.layouts).join(", ")})`,
+            );
+          }
+        }
+
+        // long-post segmentation: swap the body for its first segment + lazy
+        // marker, write the remaining segments as sibling fragment files
+        const page = task.context?.page;
+        if (segmentationEnabled && page && page.kind === "post" && typeof page.html === "string" && !page.meta.no_segment) {
+          const segs = splitHtmlSegments(page.html, segThreshold, chunkSize);
+          if (segs) {
+            const baseDir = path.join(env.publicDir, String(page.url).replace(/^\//, ""));
+            page.html = segs[0] + segEndMarker("seg/2.html");
+            for (let k = 1; k < segs.length; k++) {
+              const next = k + 1 < segs.length ? `seg/${k + 2}.html` : null;
+              const file = path.join(baseDir, "seg", `${k + 1}.html`);
+              ctx.log.debug(`write ${file}`);
+              await writeText(file, segs[k] + segEndMarker(next));
+            }
+          }
+        }
+
+        // root render context: the task context plus the reserved i18n keys —
+        // `t` (string table), `language` (lang_REGION) and `langAttr` (for
+        // <html lang>). Helpers receive this object as `this`.
+        const context = { ...(task.context ?? {}), t: tStrings, language, langAttr };
+        const partials = env.theme?.partials ?? {};
+        const partialExts = env.theme?.partialExts ?? {};
+        const html =
+          engine === "ejs"
+            ? renderEjs(tpl, context, env.helpers, partials, partialExts)
+            : render(tpl, context, env.helpers, partials);
+        await writeText(task.outPath, html);
+      });
+    },
+  };
+}
+
+// mustache-style engine (generic page deployer: claims every layout suffix the
+// EJS unit did not)
 export const templateDeployer = {
   name: "ngwg-template-deployer",
   version: "0.2.1",
-  types: ["page" as const],
+  ...makePageDeployer("mustache"),
+};
 
-  async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
-    const pool = new Pool(8);
-    // segment threshold: plugin option (plugins.files.option.segment_threshold)
-    // wins over the theme's own segment_threshold; non-finite values fall back
-    const rawThreshold = (ctx.options as any)?.self?.segment_threshold ?? env.theme?.config?.segment_threshold;
-    const segThreshold = rawThreshold === undefined || !Number.isFinite(Number(rawThreshold))
-      ? SEGMENT_DEFAULT_THRESHOLD
-      : Number(rawThreshold);
-    // chunk_size plugin option (plugins.<name>.option.chunk_size): target
-    // segment length; any negative value disables segmentation entirely
-    const rawChunk = (ctx.options as any)?.self?.chunk_size;
-    const chunkSize = rawChunk === undefined ? SEGMENT_SIZE : Number(rawChunk);
-    const segmentationEnabled = Number.isFinite(chunkSize) && chunkSize >= 0;
-
-    // i18n: resolve the language for this whole deploy run
-    const i18n: Record<string, Record<string, any>> = env.theme?.i18n ?? {};
-    const requested = typeof env.language === "string" && env.language ? env.language : undefined;
-    const { strings: tStrings, language } = resolveI18n(i18n, requested, env.theme?.config?.default_language);
-    if (requested && language && language !== requested && !language.startsWith(`${requested.split("_")[0]}_`)) {
-      ctx.log.warn(
-        `language "${requested}" has no i18n file in this theme (available: ${Object.keys(i18n).sort().join(", ") || "none"}) — ` +
-          `rendering with "${language}". Set "language" in ngwg.yaml or $NGWG_LANG to an available language.`,
-      );
-    } else if (!requested && !env.theme?.config?.default_language && Object.keys(i18n).length > 1) {
-      ctx.log.warn(
-        `theme i18n has ${Object.keys(i18n).length} languages and neither "language" (ngwg.yaml) nor $NGWG_LANG nor ` +
-          `theme.yaml "default_language" is set — using "${language}". Declare default_language in theme.yaml.`,
-      );
-    }
-    const langAttr = language.replace(/_/g, "-");
-
-    await pool.run(tasks, async (task) => {
-      ctx.log.debug(`write ${task.outPath}`);
-      const layoutName = task.template ?? "index";
-      let tpl = env.theme.layouts[layoutName];
-      if (tpl === undefined) {
-        // graceful fallbacks: page/post → index
-        if (env.theme.layouts.index !== undefined && (layoutName === "page" || layoutName === "post")) {
-          tpl = env.theme.layouts.index;
-          ctx.log.warn(`layout "${layoutName}" not found in theme — falling back to "index"`);
-        } else {
-          throw new Error(
-            `layout "${layoutName}" not found in theme (available: ${Object.keys(env.theme.layouts).join(", ")})`,
-          );
-        }
-      }
-
-      // long-post segmentation: swap the body for its first segment + lazy
-      // marker, write the remaining segments as sibling fragment files
-      const page = task.context?.page;
-      if (segmentationEnabled && page && page.kind === "post" && typeof page.html === "string" && !page.meta.no_segment) {
-        const segs = splitHtmlSegments(page.html, segThreshold, chunkSize);
-        if (segs) {
-          const baseDir = path.join(env.publicDir, String(page.url).replace(/^\//, ""));
-          page.html = segs[0] + segEndMarker("seg/2.html");
-          for (let k = 1; k < segs.length; k++) {
-            const next = k + 1 < segs.length ? `seg/${k + 2}.html` : null;
-            const file = path.join(baseDir, "seg", `${k + 1}.html`);
-            ctx.log.debug(`write ${file}`);
-            await writeText(file, segs[k] + segEndMarker(next));
-          }
-        }
-      }
-
-      // root render context: the task context plus the reserved i18n keys —
-      // `t` (string table), `language` (lang_REGION) and `langAttr` (for
-      // <html lang>). Helpers receive this object as `this`.
-      const context = { ...(task.context ?? {}), t: tStrings, language, langAttr };
-      const partials = env.theme.partials ?? {};
-      const html = isEjsTemplate(tpl)
-        ? renderEjs(tpl, context, env.helpers, partials)
-        : render(tpl, context, env.helpers, partials);
-      await writeText(task.outPath, html);
-    });
-  },
+// EJS engine, dispatched by the .ejs layout suffix
+export const ejsDeployer = {
+  name: "ngwg-ejs-deployer",
+  version: "0.1.0",
+  ...makePageDeployer("ejs"),
 };
 
 // The safety net: copies any task no other deployer claimed (theme assets,
@@ -475,4 +499,4 @@ export const options = {
   readShared: false,
 };
 
-export default { parsers: [markdownParser], deployers: [templateDeployer, fallbackDeployer], options: [options] };
+export default { parsers: [markdownParser], deployers: [ejsDeployer, templateDeployer, fallbackDeployer], options: [options] };
