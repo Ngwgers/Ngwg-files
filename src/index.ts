@@ -444,7 +444,13 @@ function makePageDeployer(engine: "ejs" | "mustache") {
         const partialExts = env.theme?.partialExts ?? {};
         const html =
           engine === "ejs"
-            ? renderEjs(tpl, context, env.helpers, partials, partialExts, { require: moduleLoader })
+            ? renderEjs(tpl, context, env.helpers, partials, partialExts, {
+                require: moduleLoader,
+                // theme messages go through the build log so they carry its
+                // level/format (silenced by --silent, verbose-only for debug)
+                warn: (msg: string) => ctx.log.warn(msg),
+                debug: (msg: string) => ctx.log.debug(msg),
+              })
             : render(tpl, context, env.helpers, partials);
         await writeText(task.outPath, html);
       });

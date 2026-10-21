@@ -39,6 +39,15 @@ export interface EjsRenderOptions {
    * host's own `require`, if any.
    */
   require?: (id: string) => any;
+  /**
+   * Sinks for template-level messages, exposed to the template as `warn(msg)`
+   * and `debug(msg)` so a theme's messages honour the build's log level and
+   * formatting instead of writing to the console directly (`debug` is the
+   * verbose-only channel, for notes that are useful but not actionable).
+   * Absent → templates fall back to `console.warn` / `console.debug`.
+   */
+  warn?: (msg: string) => void;
+  debug?: (msg: string) => void;
 }
 
 /** Suffixes rendered by the EJS engine (kept in sync with the EJS unit). */
@@ -87,9 +96,12 @@ export function renderEjs(
   };
 
   const locals: Record<string, any> = { ...context, h: bound, partial };
-  // the loader is EJS-only and is not part of the (data) page context, so it
-  // is added here instead of being threaded through every caller
+  // the loader and the message sinks are EJS-only and are not part of the
+  // (data) page context, so they are added here instead of being threaded
+  // through every caller
   if (options.require) locals.require = options.require;
+  if (options.warn) locals.warn = options.warn;
+  if (options.debug) locals.debug = options.debug;
 
   return ejs.render(template, locals, {
     filename: "theme-layout.ejs",
