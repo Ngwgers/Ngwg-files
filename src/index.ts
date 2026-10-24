@@ -240,10 +240,12 @@ export const markdownParser = {
 // --- long-post segmentation (pjax incremental loading) ----------------------
 //
 // Posts whose rendered body exceeds the threshold are split into segments at
-// block boundaries. The page ships only the first segment plus a marker
-// pointing at the next one; the rest are written as small fragment files
-// (seg/2.html, …) that the theme fetches lazily while the reader scrolls —
-// a long article never has to be downloaded in one piece.
+// block boundaries. The page ships only the first segment plus a marker that
+// lists every remaining fragment (seg/2.html, …); the fragments themselves
+// also name their successor, so a theme can walk them one by one. A theme
+// picks either style: the list lets it fetch several fragments at once (and
+// resolve a `#anchor` that lives in a later part without waiting for scroll),
+// the chain keeps working with themes that only look at `data-next`.
 
 export const SEGMENT_DEFAULT_THRESHOLD = 8000;
 export const SEGMENT_SIZE = 4000;
@@ -284,8 +286,10 @@ export function splitHtmlSegments(
   return parts.length > 1 ? parts : null;
 }
 
-function segEndMarker(next: string | null): string {
-  return next ? `<div class="post-seg-end" data-next="${next}"></div>` : "";
+function segEndMarker(next: string | null, all?: string[]): string {
+  if (!next) return "";
+  const list = all && all.length ? ` data-segments="${all.join(" ")}"` : "";
+  return `<div class="post-seg-end" data-next="${next}"${list}></div>`;
 }
 
 // --- i18n (theme translation strings) ----------------------------------------
@@ -426,7 +430,10 @@ function makePageDeployer(engine: "ejs" | "mustache") {
           const segs = splitHtmlSegments(page.html, segThreshold, chunkSize);
           if (segs) {
             const baseDir = path.join(env.publicDir, String(page.url).replace(/^\//, ""));
-            page.html = segs[0] + segEndMarker("seg/2.html");
+            // every remaining fragment, in order, advertised on the first
+            // marker so a theme can load them independently
+            const urls = segs.slice(1).map((_, i) => `seg/${i + 2}.html`);
+            page.html = segs[0] + segEndMarker(urls[0], urls);
             for (let k = 1; k < segs.length; k++) {
               const next = k + 1 < segs.length ? `seg/${k + 2}.html` : null;
               const file = path.join(baseDir, "seg", `${k + 1}.html`);
