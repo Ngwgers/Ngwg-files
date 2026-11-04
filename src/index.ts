@@ -19,9 +19,11 @@
 //                      no other deployer claimed
 //   ngwg-option-v1   : files-options — publishes the chunk_size (long-post
 //                      segmentation target length; negative disables
-//                      segmentation) and segment_threshold (body length above
+//                      segmentation), segment_threshold (body length above
 //                      which a post is segmented; wins over the theme's own
-//                      segment_threshold) options
+//                      segment_threshold) and markdown (TeX opt-in) options
+//   ngwg-helper-v1   : markdown-helper — publishes site.extra.markdown.tex so
+//                      themes can load the KaTeX stylesheet only when needed
 //
 // Every unit is independent and declares the files/tasks it handles; the
 // module itself is fully self-contained: no imports from Ngwg-core, so it
@@ -30,12 +32,12 @@
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { Pool } from "./pool.ts";
-import { markdownToHtml, markdownTitle, splitMoreMarker } from "./markdown.ts";
+import { markdownToHtml, markdownTitle, resolveTexConfig, splitMoreMarker, texForPage } from "./markdown.ts";
 import { render } from "./template.ts";
 import { EJS_EXTENSIONS, renderEjs } from "./ejs.ts";
-import { writeBytes, writeText } from "./write.ts";
+import { writeBytes, writeText, copyFileIfAbsent } from "./write.ts";
 
 // --- minimal structural types (mirror of Ngwg-core protocol definitions) ---
 
@@ -139,7 +141,7 @@ async function collectImages(ctx: PluginContext, filePath: string, bodies: strin
 
 export const markdownParser = {
   name: "ngwg-markdown-parser",
-  version: "0.2.0",
+  version: "0.3.0",
   extensions: [".md", ".markdown"],
 
   async parseFile(ctx: PluginContext, filePath: string, content: Uint8Array): Promise<SourceObject | null> {
@@ -209,7 +211,9 @@ export const markdownParser = {
     // what listings show.
     const { body: mainBody, excerptSource } = splitMoreMarker(body);
     const { rewrite, images } = await collectImages(ctx, filePath, excerptSource === null ? [mainBody] : [excerptSource, mainBody]);
-    const excerptHtml = excerptSource === null ? undefined : markdownToHtml(rewrite(excerptSource));
+    // TeX is opt-in globally and may be overridden per article (`tex:`)
+    const markdownConfig = { tex: texForPage(resolveTexConfig((ctx.options as any)?.self?.markdown?.tex), meta.tex) };
+    const excerptHtml = excerptSource === null ? undefined : markdownToHtml(rewrite(excerptSource), markdownConfig);
     const fullBody = (excerptSource === null ? "" : rewrite(excerptSource)) + rewrite(mainBody);
 
     // the primary object for the markdown file itself, plus one derived
@@ -229,7 +233,7 @@ export const markdownParser = {
           date: meta.date ?? (fileDate ? fileDate.toISOString().slice(0, 10) : ""),
         },
         body: fullBody,
-        html: markdownToHtml(fullBody),
+        html: markdownToHtml(fullBody, markdownConfig),
         excerptHtml,
       },
       ...images,
@@ -355,6 +359,86 @@ export function resolveI18n(
   return { strings: i18n[keys.sort()[0]], language: keys.sort()[0] };
 }
 
+// --- Markdown runtime assets -------------------------------------------------
+//
+// The renderer emits KaTeX HTML (which needs its stylesheet + fonts) and bare
+// `<pre class="mermaid">` blocks (which the browser renders with Mermaid's
+// runtime). Both are copied from this plugin's own dependencies into
+// public/assets/ only when the site actually uses them. Themes read
+// site.extra.markdown.tex to decide whether to link the KaTeX stylesheet and
+// load /assets/mermaid/mermaid.min.js from their own script.
+
+const pluginRequire = createRequire(import.meta.url);
+
+function packageRoot(name: string): string {
+  return path.dirname(pluginRequire.resolve(`${name}/package.json`));
+}
+
+async function copyAsset(src: string, dest: string): Promise<void> {
+  await copyFileIfAbsent(src, dest);
+}
+
+async function ensureKatexAssets(publicDir: string): Promise<void> {
+  const dist = path.join(packageRoot("katex"), "dist");
+  const dest = path.join(publicDir, "assets", "katex");
+  await copyAsset(path.join(dist, "katex.min.css"), path.join(dest, "katex.min.css"));
+  for (const font of await readdir(path.join(dist, "fonts"))) {
+    await copyAsset(path.join(dist, "fonts", font), path.join(dest, "fonts", font));
+  }
+}
+
+async function ensureMermaidAsset(publicDir: string): Promise<void> {
+  await copyAsset(
+    path.join(packageRoot("mermaid"), "dist", "mermaid.min.js"),
+    path.join(publicDir, "assets", "mermaid", "mermaid.min.js"),
+  );
+}
+
+async function ensureMarkdownAssets(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
+  const globalTex = resolveTexConfig((ctx.options as any)?.self?.markdown?.tex);
+  let katexNeeded = globalTex.enabled && globalTex.backend === "katex";
+  let mermaidNeeded = false;
+  for (const task of tasks) {
+    const page = task.context?.page;
+    if (!page) continue;
+    const tex = texForPage(globalTex, page.meta?.tex);
+    if (tex.enabled && tex.backend === "katex") katexNeeded = true;
+    if (typeof page.html === "string" && page.html.includes('class="mermaid"')) mermaidNeeded = true;
+  }
+  if (katexNeeded) await ensureKatexAssets(env.publicDir);
+  if (mermaidNeeded) await ensureMermaidAsset(env.publicDir);
+}
+
+// --- helper unit (ngwg-helper-v1) -------------------------------------------
+
+/**
+ * Publishes the effective TeX configuration (and which backends are actually
+ * used) as site.extra.markdown.tex. Themes use `katex` to include the KaTeX
+ * stylesheet only when a page renders KaTeX math.
+ */
+export const markdownHelper = {
+  // the unit name must match the manifest name: Core keys plugin contexts by
+  // it when handing buildData() its context
+  name: "files",
+  version: "0.1.0",
+  // no template helpers — this unit only contributes buildData
+  helpers: {},
+
+  buildData(ctx: PluginContext, data: any, posts: any[]) {
+    const globalTex = resolveTexConfig((ctx.options as any)?.self?.markdown?.tex);
+    let katex = globalTex.enabled && globalTex.backend === "katex";
+    let mathjax = globalTex.enabled && globalTex.backend === "mathjax";
+    const all = [...(posts ?? []), ...(data?.pages ?? []), ...(data?.hiddenPosts ?? [])];
+    for (const page of all) {
+      const tex = texForPage(globalTex, page.meta?.tex);
+      if (!tex.enabled) continue;
+      if (tex.backend === "katex") katex = true;
+      else mathjax = true;
+    }
+    return { markdown: { tex: { enabled: globalTex.enabled, backend: globalTex.backend, katex, mathjax } } };
+  },
+};
+
 // --- deployer units (ngwg-deployer-v1) ---------------------------------------
 //
 // Page tasks are dispatched by *layout suffix*, not by sniffing template
@@ -371,6 +455,7 @@ function makePageDeployer(engine: "ejs" | "mustache") {
     ...(engine === "ejs" ? { templateExtensions: [...EJS_EXTENSIONS] } : {}),
 
     async deploy(ctx: PluginContext, env: any, tasks: RenderTask[]): Promise<void> {
+      await ensureMarkdownAssets(ctx, env, tasks);
       const pool = new Pool(8);
       // theme-scoped module loader: an EJS template resolves bare specifiers
       // from the theme's own node_modules (the packages its package.json
@@ -512,15 +597,21 @@ export const fallbackDeployer = {
 
 // ngwg-option-v1: opts in to the option system and publishes chunk_size (the
 // target segment length for long-post segmentation; any negative value
-// disables segmentation; the per-post no_segment frontmatter still wins) and
+// disables segmentation; the per-post no_segment frontmatter still wins),
 // segment_threshold (the body length above which a post is segmented; wins
-// over the theme's own segment_threshold).
+// over the theme's own segment_threshold) and markdown.tex (opt-in TeX:
+// { enabled: false, backend: "katex" | "mathjax" }).
 export const options = {
   name: "files-options",
-  version: "0.2.2",
-  public: ["chunk_size", "segment_threshold"],
+  version: "0.3.0",
+  public: ["chunk_size", "segment_threshold", "markdown"],
   private: [],
   readShared: false,
 };
 
-export default { parsers: [markdownParser], deployers: [ejsDeployer, templateDeployer, fallbackDeployer], options: [options] };
+export default {
+  parsers: [markdownParser],
+  deployers: [ejsDeployer, templateDeployer, fallbackDeployer],
+  helpers: [markdownHelper],
+  options: [options],
+};

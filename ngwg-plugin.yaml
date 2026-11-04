@@ -1,7 +1,9 @@
 name: files
 version: 0.3.0
 entry: src/index.ts
-description: "Must-load plugin: parses markdown/frontmatter sources and deploys rendered pages to public/ (mustache-style engine, plus an EJS unit for .ejs layouts)"
+description: "Must-load plugin: parses markdown/frontmatter sources (task lists, tabs, alerts, opt-in TeX, Mermaid) and deploys rendered pages to public/"
 protocols:
   - ngwg-parser-v1
   - ngwg-deployer-v1
+  - ngwg-helper-v1
+  - ngwg-option-v1

@@ -19,14 +19,50 @@ import markdownItAdmonition from "markdown-it-admonition";
 import { abbr } from "@mdit/plugin-abbr";
 import { alert } from "@mdit/plugin-alert";
 import { footnote } from "@mdit/plugin-footnote";
+import { katex } from "@mdit/plugin-katex";
 import { mark } from "@mdit/plugin-mark";
+import { createMathjaxInstance, mathjax } from "@mdit/plugin-mathjax";
 import { sub } from "@mdit/plugin-sub";
 import { sup } from "@mdit/plugin-sup";
+import { tab } from "@mdit/plugin-tab";
+import { tasklist } from "@mdit/plugin-tasklist";
+import MermaidIt from "mermaid-it-markdown";
 import anchor from "markdown-it-anchor";
 ```
 
 **摘要标记**：正文中的 `<!-- more -->` 之前的部分会被解析为摘要，
 并在首页等位置显示。此功能不会导致文章被切割。
+
+**TeX 数学公式（默认关闭）**：TeX 渲染较消耗性能，需在 ngwg.yaml 手动开启：
+
+```yaml
+plugins:
+  files:
+    option:
+      markdown:
+        tex:
+          enabled: true      # 默认 false
+          backend: katex     # "katex"（默认）或 "mathjax"
+```
+
+文章 frontmatter 的 `tex: true | "katex" | "mathjax"` 可覆盖全局设定
+（`true` 等价于 `katex`）。开启后支持 `$...$` 行内公式与 `$$...$$` 块级公式。
+KaTeX 输出需要样式表：插件会在构建时把 `katex.min.css` 与字体复制到
+`/assets/katex/`，主题在 `site.extra.markdown.tex.katex` 为真时引入即可；
+MathJax 输出为自包含 SVG，无需额外样式。
+
+**Mermaid**：```` ```mermaid ```` 代码块输出为 `<pre class="mermaid">源码</pre>`，
+构建时不渲染（mermaid-it-markdown 仅在浏览器中工作）；插件会在检测到
+Mermaid 图时把浏览器运行时复制到 `/assets/mermaid/mermaid.min.js`，
+由主题脚本在客户端渲染。
+
+**任务列表 / Tab 栏**：`- [ ] / - [x]` 渲染为带 checkbox 的任务列表；
+`::: tabs` + `@tab 标题` 渲染为 Tab 栏（`@tab:active` 标记默认激活项），
+切换交互由主题脚本提供。
+
+**GFM Alert**：`> [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]`
+渲染为 `markdown-alert markdown-alert-<type>` 结构，与 `!!!` 风格的
+admonition 并存；主题需为两种类名提供样式。
 
 
 ### ngwg-ejs-deployer / ngwg-template-deployer
@@ -61,6 +97,13 @@ include 只从主题内存中的 partial 表解析，未知名字直接报错，
 正文按顶层块边界切段：页面只带第一段，其余写入 `seg/N.html` 片段供主题懒加载。
 切分目标段长由插件选项 `chunk_size` 控制（默认 4000，ngwg.yaml 写
 `plugins.files.option.chunk_size`；任意负数整体禁用分段）。
+
+### ngwg-markdown-helper
+实现 ngwg-helper-v1 。
+
+`buildData` 把 TeX 的实际使用情况发布到 `site.extra.markdown.tex`
+（`enabled` / `backend` / `katex` / `mathjax`），主题据此决定是否引入
+KaTeX 样式表。
 
 ### ngwg-fallback-deployer
 实现 ngwg-deployer-v1。
