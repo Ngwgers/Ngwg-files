@@ -509,16 +509,21 @@ function makePageDeployer(engine: "ejs" | "mustache") {
         }
 
         // long-post segmentation: swap the body for its first segment + lazy
-        // marker, write the remaining segments as sibling fragment files
+        // marker, write the remaining segments as sibling fragment files.
+        // The mutated body is NOT written back into the SourceObject — dev
+        // reloads (e.g. a theme-only reset) re-deploy the same parsed objects
+        // without re-parsing, so a mutated `page.html` would get segmented a
+        // second time and corrupt the article.
         const page = task.context?.page;
-        if (segmentationEnabled && page && page.kind === "post" && typeof page.html === "string" && !page.meta.no_segment) {
-          const segs = splitHtmlSegments(page.html, segThreshold, chunkSize);
+        let bodyHtml = page?.html;
+        if (segmentationEnabled && page && page.kind === "post" && typeof bodyHtml === "string" && !page.meta.no_segment) {
+          const segs = splitHtmlSegments(bodyHtml, segThreshold, chunkSize);
           if (segs) {
             const baseDir = path.join(env.publicDir, String(page.url).replace(/^\//, ""));
             // every remaining fragment, in order, advertised on the first
             // marker so a theme can load them independently
             const urls = segs.slice(1).map((_, i) => `seg/${i + 2}.html`);
-            page.html = segs[0] + segEndMarker(urls[0], urls);
+            bodyHtml = segs[0] + segEndMarker(urls[0], urls);
             for (let k = 1; k < segs.length; k++) {
               const next = k + 1 < segs.length ? `seg/${k + 2}.html` : null;
               const file = path.join(baseDir, "seg", `${k + 1}.html`);
@@ -532,6 +537,7 @@ function makePageDeployer(engine: "ejs" | "mustache") {
         // `t` (string table), `language` (lang_REGION) and `langAttr` (for
         // <html lang>). Helpers receive this object as `this`.
         const context = { ...(task.context ?? {}), t: tStrings, language, langAttr };
+        if (page && bodyHtml !== page.html) context.page = { ...page, html: bodyHtml };
         const partials = env.theme?.partials ?? {};
         const partialExts = env.theme?.partialExts ?? {};
         const html =
