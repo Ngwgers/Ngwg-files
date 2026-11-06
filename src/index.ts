@@ -22,8 +22,8 @@
 //                      segmentation), segment_threshold (body length above
 //                      which a post is segmented; wins over the theme's own
 //                      segment_threshold) and markdown (TeX opt-in) options
-//   ngwg-helper-v1   : markdown-helper — publishes site.extra.markdown.tex so
-//                      themes can load the KaTeX stylesheet only when needed
+//   ngwg-helper-v1   : ngwg-markdown-helper — publishes site.extra.markdown.tex
+//                      so themes can load the KaTeX stylesheet only when needed
 //
 // Every unit is independent and declares the files/tasks it handles; the
 // module itself is fully self-contained: no imports from Ngwg-core, so it
@@ -194,13 +194,15 @@ export const markdownParser = {
     // nested under _posts/ — subdirectories keep posts from colliding on the
     // same slug. Pages keep directory-style URLs:
     //   about/index.md → /about/   about.md → /about/   index.md → /
+    // (the same rule applies to .markdown files)
     const subPath = isPost
       ? relToSource.slice(POSTS_DIR.length + 1, relToSource.length - base.length - ext.length)
       : "";
     let pageUrl: string;
-    if (relToSource === "index.md") pageUrl = "/";
-    else if (relToSource.endsWith("/index.md")) pageUrl = `/${relToSource.slice(0, -"/index.md".length)}/`;
-    else pageUrl = `/${relToSource.replace(/\.(md|markdown)$/, "")}/`;
+    if (/(?:^|\/)index\.(?:md|markdown)$/i.test(relToSource)) {
+      const dir = relToSource.slice(0, relToSource.lastIndexOf("/") + 1);
+      pageUrl = `/${dir}`;
+    } else pageUrl = `/${relToSource.replace(/\.(md|markdown)$/i, "")}/`;
     const url = meta.permalink ?? (isPost ? `/posts/${subPath}${slug}/` : pageUrl);
 
     const title = meta.title ?? markdownTitle(body) ?? slug;
@@ -417,9 +419,7 @@ async function ensureMarkdownAssets(ctx: PluginContext, env: any, tasks: RenderT
  * stylesheet only when a page renders KaTeX math.
  */
 export const markdownHelper = {
-  // the unit name must match the manifest name: Core keys plugin contexts by
-  // it when handing buildData() its context
-  name: "files",
+  name: "ngwg-markdown-helper",
   version: "0.1.0",
   // no template helpers — this unit only contributes buildData
   helpers: {},
@@ -497,10 +497,17 @@ function makePageDeployer(engine: "ejs" | "mustache") {
         const layoutName = task.template ?? "index";
         let tpl = env.theme.layouts[layoutName];
         if (tpl === undefined) {
-          // graceful fallbacks: page/post → index
-          if (env.theme.layouts.index !== undefined && (layoutName === "page" || layoutName === "post")) {
-            tpl = env.theme.layouts.index;
-            ctx.log.warn(`layout "${layoutName}" not found in theme — falling back to "index"`);
+          // graceful fallbacks: any missing layout falls back to "page", then
+          // to "index" (Core resolves the same chain when it builds tasks)
+          const fallbackName =
+            layoutName === "page"
+              ? "index"
+              : env.theme.layouts.page !== undefined
+                ? "page"
+                : "index";
+          if (layoutName !== fallbackName && env.theme.layouts[fallbackName] !== undefined) {
+            tpl = env.theme.layouts[fallbackName];
+            ctx.log.warn(`layout "${layoutName}" not found in theme — falling back to "${fallbackName}"`);
           } else {
             throw new Error(
               `layout "${layoutName}" not found in theme (available: ${Object.keys(env.theme.layouts).join(", ")})`,

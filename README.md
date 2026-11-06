@@ -93,7 +93,8 @@ include 只从主题内存中的 partial 表解析，未知名字直接报错，
 引擎只看扩展名，不再按模板内容猜测：需要在模板中字面展示 `<%` 时无需额外转义
 （非 `.ejs` 文件不会进入 EJS）。
 
-**长文分段**：渲染超过 `segment_threshold`（主题配置，默认 8000 字符）的文章时，
+**长文分段**：渲染超过 `segment_threshold`（主题配置，默认 8000 字符；
+`plugins.files.option.segment_threshold` 优先于主题同名配置）的文章时，
 正文按顶层块边界切段：页面只带第一段，其余写入 `seg/N.html` 片段供主题懒加载。
 切分目标段长由插件选项 `chunk_size` 控制（默认 4000，ngwg.yaml 写
 `plugins.files.option.chunk_size`；任意负数整体禁用分段）。
@@ -108,9 +109,10 @@ KaTeX 样式表。
 ### ngwg-fallback-deployer
 实现 ngwg-deployer-v1。
 
-本模块会认领没有被任何 deployer 认领的任务，将源文件直接复制到目标位置。
+本模块会认领没有被任何 deployer 认领的复制任务——主题 `assets/`、源目录中的
+静态文件、parser 派生出的图片等——并把内容原样写入目标位置。
 
-如果认领的是渲染任务将会报错。
+如果认领的是渲染任务（没有 deployer 能渲染页面），将会报错。
 
 ## 许可证 / License
 
